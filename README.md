@@ -1,0 +1,1 @@
+OpenAPI Spec Path Dependency Mapper — paste OpenAPI 3.x JSON to render a collapsible path tree with per-method $ref dependencies, a schema index showing usage counts, and endpoint/schema/$ref statistics.

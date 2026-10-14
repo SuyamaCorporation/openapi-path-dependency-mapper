@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenAPI Path Dependency Mapper</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen p-6">
+<div class="max-w-6xl mx-auto">
+  <h1 class="text-2xl font-bold text-orange-400 mb-2">OpenAPI Spec Path Dependency Mapper</h1>
+  <p class="text-gray-400 mb-6 text-sm">Paste an OpenAPI 3.x JSON spec to visualize path endpoints and their schema ($ref) dependencies</p>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Input panel -->
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-semibold text-gray-200">OpenAPI JSON Input</h2>
+        <div class="flex gap-2">
+          <button id="sampleBtn" class="text-xs bg-orange-800 hover:bg-orange-700 px-3 py-1 rounded-lg">Load Sample</button>
+          <button id="parseBtn" class="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded-lg font-semibold">Parse</button>
+          <button id="clearInputBtn" class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded-lg">Clear</button>
+        </div>
+      </div>
+      <textarea id="specInput" spellcheck="false"
+        class="w-full h-80 bg-gray-900 border border-gray-800 rounded-xl p-3 text-xs font-mono text-gray-300 focus:outline-none focus:border-orange-500 resize-y"
+        placeholder='Paste OpenAPI 3.x JSON here...'></textarea>
+      <div id="parseError" class="mt-2 text-xs text-red-400 hidden"></div>
+
+      <!-- Stats -->
+      <div id="statsDiv" class="mt-3 grid grid-cols-3 gap-3 hidden">
+        <div class="bg-gray-900 rounded-xl p-3 border border-gray-800 text-center">
+          <div class="text-2xl font-bold text-orange-400" id="statEndpoints">0</div>
+          <div class="text-xs text-gray-400">Endpoints</div>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-3 border border-gray-800 text-center">
+          <div class="text-2xl font-bold text-blue-400" id="statSchemas">0</div>
+          <div class="text-xs text-gray-400">Schemas</div>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-3 border border-gray-800 text-center">
+          <div class="text-2xl font-bold text-purple-400" id="statRefs">0</div>
+          <div class="text-xs text-gray-400">$ref uses</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output panel -->
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-semibold text-gray-200">Path Tree & Dependencies</h2>
+        <div class="flex gap-2">
+          <button id="expandAllBtn" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded-lg">Expand All</button>
+          <button id="collapseAllBtn" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded-lg">Collapse All</button>
+        </div>
+      </div>
+      <div id="treeDiv" class="bg-gray-900 rounded-xl p-4 border border-gray-800 h-80 overflow-y-auto text-xs font-mono">
+        <span class="text-gray-600">Parse a spec to see the path tree...</span>
+      </div>
+
+      <!-- Schema index -->
+      <div class="mt-4">
+        <h2 class="text-sm font-semibold text-gray-200 mb-2">Schema Index</h2>
+        <div id="schemaDiv" class="bg-gray-900 rounded-xl p-4 border border-gray-800 max-h-60 overflow-y-auto text-xs">
+          <span class="text-gray-600">No schemas parsed yet...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SAMPLE_SPEC = {
+  "openapi": "3.0.3",
+  "info": { "title": "Pet Store API", "version": "1.0.0" },
+  "paths": {
+    "/pets": {
+      "get": {
+        "summary": "List all pets",
+        "operationId": "listPets",
+        "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "A list of pets", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pets" } } } }
+        }
+      },
+      "post": {
+        "summary": "Create a pet",
+        "operationId": "createPets",
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewPet" } } } },
+        "responses": {
+          "201": { "description": "Null response" },
+          "default": { "description": "unexpected error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/pets/{petId}": {
+      "get": {
+        "summary": "Info for a specific pet",
+        "operationId": "showPetById",
+        "parameters": [{ "name": "petId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Expected response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pet" } } } },
+          "default": { "description": "unexpected error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "put": {
+        "summary": "Update a pet",
+        "operationId": "updatePet",
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewPet" } } } },
+        "responses": {
+          "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pet" } } } }
+        }
+      },
+      "delete": {
+        "summary": "Delete a pet",
+        "operationId": "deletePet",
+        "responses": { "204": { "description": "No content" } }
+      }
+    },
+    "/owners": {
+      "get": {
+        "summary": "List owners",
+        "operationId": "listOwners",
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Owners" } } } }
+        }
+      }
+    },
+    "/owners/{ownerId}/pets": {
+      "get": {
+        "summary": "List pets for owner",
+        "operationId": "listOwnerPets",
+        "parameters": [{ "name": "ownerId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pets" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Pet": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "tag": { "type": "string" },
+          "owner": { "$ref": "#/components/schemas/Owner" }
+        }
+      },
+      "NewPet": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "tag": { "type": "string" }
+        }
+      },
+      "Pets": {
+        "type": "array",
+        "items": { "$ref": "#/components/schemas/Pet" }
+      },
+      "Owner": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" }
+        }
+      },
+      "Owners": {
+        "type": "array",
+        "items": { "$ref": "#/components/schemas/Owner" }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "integer" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+};
+
+const METHOD_COLORS = {
+  get:    { bg: '#1d4ed8', text: '#93c5fd', label: 'GET' },
+  post:   { bg: '#065f46', text: '#6ee7b7', label: 'POST' },
+  put:    { bg: '#92400e', text: '#fcd34d', label: 'PUT' },
+  patch:  { bg: '#581c87', text: '#d8b4fe', label: 'PATCH' },
+  delete: { bg: '#7f1d1d', text: '#fca5a5', label: 'DEL' },
+  head:   { bg: '#1e3a5f', text: '#bfdbfe', label: 'HEAD' },
+  options:{ bg: '#1c1917', text: '#d6d3d1', label: 'OPT' },
+};
+
+function extractRefs(obj, found = new Set()) {
+  if (!obj || typeof obj !== 'object') return found;
+  if (Array.isArray(obj)) { obj.forEach(v => extractRefs(v, found)); return found; }
+  Object.entries(obj).forEach(([k, v]) => {
+    if (k === '$ref' && typeof v === 'string') {
+      const name = v.split('/').pop();
+      found.add(name);
+    } else {
+      extractRefs(v, found);
+    }
+  });
+  return found;
+}
+
+function countAllRefs(obj, count = {c: 0}) {
+  if (!obj || typeof obj !== 'object') return count.c;
+  if (Array.isArray(obj)) { obj.forEach(v => countAllRefs(v, count)); return count.c; }
+  Object.entries(obj).forEach(([k, v]) => {
+    if (k === '$ref') count.c++;
+    else countAllRefs(v, count);
+  });
+  return count.c;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Group paths into tree structure
+function buildPathTree(paths) {
+  const tree = {};
+  Object.keys(paths).sort().forEach(path => {
+    const parts = path.split('/').filter(Boolean);
+    let node = tree;
+    parts.forEach((part, i) => {
+      if (!node[part]) node[part] = { _path: null, _children: {} };
+      if (i === parts.length - 1) node[part]._path = path;
+      node = node[part]._children;
+    });
+  });
+  return tree;
+}
+
+function parseAndRender() {
+  const raw = document.getElementById('specInput').value.trim();
+  const errDiv = document.getElementById('parseError');
+  errDiv.classList.add('hidden');
+
+  let spec;
+  try {
+    spec = JSON.parse(raw);
+  } catch(e) {
+    errDiv.textContent = 'JSON parse error: ' + e.message;
+    errDiv.classList.remove('hidden');
+    return;
+  }
+
+  if (!spec.paths) {
+    errDiv.textContent = 'No "paths" field found. Make sure this is a valid OpenAPI 3.x spec.';
+    errDiv.classList.remove('hidden');
+    return;
+  }
+
+  const paths = spec.paths;
+  const schemas = (spec.components && spec.components.schemas) || {};
+  const pathKeys = Object.keys(paths);
+  const schemaKeys = Object.keys(schemas);
+  const totalRefs = countAllRefs(paths);
+
+  // Stats
+  document.getElementById('statEndpoints').textContent = pathKeys.length;
+  document.getElementById('statSchemas').textContent = schemaKeys.length;
+  document.getElementById('statRefs').textContent = totalRefs;
+  document.getElementById('statsDiv').classList.remove('hidden');
+
+  // Build tree HTML
+  const tree = buildPathTree(paths);
+  const treeDiv = document.getElementById('treeDiv');
+  treeDiv.innerHTML = '';
+  renderTreeNode(tree, paths, treeDiv, 0, '/');
+
+  // Schema index
+  renderSchemaIndex(schemas, paths);
+}
+
+function renderTreeNode(node, paths, container, depth, prefix) {
+  const keys = Object.keys(node).sort((a,b) => {
+    // Sort: non-param before param
+    const aParam = a.startsWith('{'), bParam = b.startsWith('{');
+    if (aParam !== bParam) return aParam ? 1 : -1;
+    return a.localeCompare(b);
+  });
+
+  keys.forEach(key => {
+    const child = node[key];
+    const fullPath = child._path;
+    const hasChildren = Object.keys(child._children).length > 0;
+    const isParam = key.startsWith('{');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'select-none';
+
+    // Row
+    const row = document.createElement('div');
+    row.className = 'flex items-start gap-1 py-0.5 hover:bg-gray-800 rounded cursor-pointer group';
+    row.style.paddingLeft = (depth * 16 + 4) + 'px';
+
+    // Expand toggle
+    const toggle = document.createElement('span');
+    toggle.className = 'text-gray-600 w-4 text-center flex-shrink-0';
+    if (fullPath || hasChildren) {
+      toggle.textContent = hasChildren ? '▼' : '·';
+    }
+
+    // Path segment
+    const segSpan = document.createElement('span');
+    segSpan.className = isParam ? 'text-yellow-400' : 'text-gray-200';
+    segSpan.textContent = '/' + key;
+
+    row.appendChild(toggle);
+    row.appendChild(segSpan);
+
+    // Methods for this path
+    if (fullPath && paths[fullPath]) {
+      const methodsDiv = document.createElement('span');
+      methodsDiv.className = 'flex flex-wrap gap-1 ml-2';
+      const METHODS = ['get','post','put','patch','delete','head','options'];
+      METHODS.forEach(method => {
+        if (!paths[fullPath][method]) return;
+        const op = paths[fullPath][method];
+        const mc = METHOD_COLORS[method] || { bg: '#374151', text: '#9ca3af', label: method.toUpperCase() };
+        const tag = document.createElement('span');
+        tag.style.cssText = `background:${mc.bg};color:${mc.text};`;
+        tag.className = 'px-1 rounded text-xs font-bold font-mono';
+        tag.textContent = mc.label;
+        methodsDiv.appendChild(tag);
+      });
+      row.appendChild(methodsDiv);
+    }
+
+    wrapper.appendChild(row);
+
+    // Deps section (collapsible)
+    const depsDiv = document.createElement('div');
+    depsDiv.className = 'deps-section';
+    depsDiv.style.paddingLeft = (depth * 16 + 20) + 'px';
+
+    if (fullPath && paths[fullPath]) {
+      const METHODS = ['get','post','put','patch','delete','head','options'];
+      METHODS.forEach(method => {
+        if (!paths[fullPath][method]) return;
+        const op = paths[fullPath][method];
+        const refs = extractRefs(op);
+        if (refs.size === 0) return;
+        const mc = METHOD_COLORS[method] || { bg: '#374151', text: '#9ca3af', label: method.toUpperCase() };
+
+        const methodRow = document.createElement('div');
+        methodRow.className = 'flex flex-wrap items-center gap-1 py-0.5';
+        methodRow.innerHTML = `<span style="background:${mc.bg};color:${mc.text};" class="px-1 rounded text-xs font-bold font-mono">${mc.label}</span>
+          <span class="text-gray-600">→</span>`;
+        refs.forEach(ref => {
+          const chip = document.createElement('span');
+          chip.className = 'px-1.5 py-0 rounded-full text-xs bg-purple-900 text-purple-300 font-mono border border-purple-700';
+          chip.textContent = ref;
+          methodRow.appendChild(chip);
+        });
+        if (op.summary) {
+          const sum = document.createElement('span');
+          sum.className = 'text-gray-600 text-xs ml-1';
+          sum.textContent = op.summary;
+          methodRow.appendChild(sum);
+        }
+        depsDiv.appendChild(methodRow);
+      });
+    }
+
+    wrapper.appendChild(depsDiv);
+
+    // Children
+    const childrenDiv = document.createElement('div');
+    childrenDiv.className = 'children-section';
+    renderTreeNode(child._children, paths, childrenDiv, depth+1, (prefix+key+'/'));
+    wrapper.appendChild(childrenDiv);
+
+    // Toggle click
+    let expanded = true;
+    row.addEventListener('click', () => {
+      expanded = !expanded;
+      toggle.textContent = !expanded ? '▶' : (hasChildren ? '▼' : '·');
+      depsDiv.style.display = expanded ? '' : 'none';
+      childrenDiv.style.display = expanded ? '' : 'none';
+    });
+
+    container.appendChild(wrapper);
+  });
+}
+
+function renderSchemaIndex(schemas, paths) {
+  const div = document.getElementById('schemaDiv');
+  const schemaKeys = Object.keys(schemas).sort();
+
+  if (schemaKeys.length === 0) {
+    div.innerHTML = '<span class="text-gray-600">No schemas defined in components.</span>';
+    return;
+  }
+
+  // For each schema, find which endpoints reference it
+  const schemaUsedBy = {};
+  schemaKeys.forEach(s => schemaUsedBy[s] = []);
+  Object.entries(paths).forEach(([path, pathObj]) => {
+    const METHODS = ['get','post','put','patch','delete','head','options'];
+    METHODS.forEach(method => {
+      if (!pathObj[method]) return;
+      const refs = extractRefs(pathObj[method]);
+      refs.forEach(ref => {
+        if (schemaUsedBy[ref]) schemaUsedBy[ref].push(`${method.toUpperCase()} ${path}`);
+      });
+    });
+  });
+
+  div.innerHTML = '';
+  schemaKeys.forEach(name => {
+    const schema = schemas[name];
+    const usedBy = schemaUsedBy[name] || [];
+    const ownRefs = extractRefs(schema);
+
+    const item = document.createElement('div');
+    item.className = 'mb-3 pb-3 border-b border-gray-800 last:border-0';
+
+    let html = `<div class="flex items-center gap-2 cursor-pointer schema-toggle">
+      <span class="text-orange-400 font-bold">${escapeHtml(name)}</span>
+      <span class="text-gray-600 text-xs">${escapeHtml(schema.type || 'object')}</span>`;
+    if (ownRefs.size > 0) {
+      ownRefs.forEach(r => {
+        html += `<span class="text-xs bg-indigo-900 text-indigo-300 px-1.5 rounded-full border border-indigo-700 font-mono">${escapeHtml(r)}</span>`;
+      });
+    }
+    html += `<span class="text-gray-600 text-xs ml-auto">${usedBy.length} use${usedBy.length!==1?'s':''}</span></div>`;
+
+    if (usedBy.length > 0) {
+      html += `<div class="schema-detail mt-1 pl-2 space-y-0.5">`;
+      usedBy.forEach(u => {
+        const [m, ...rest] = u.split(' ');
+        const mc = METHOD_COLORS[m.toLowerCase()] || { bg: '#374151', text: '#9ca3af' };
+        html += `<div class="flex items-center gap-1.5">
+          <span style="background:${mc.bg};color:${mc.text};" class="px-1 rounded text-xs font-bold font-mono">${escapeHtml(m)}</span>
+          <span class="text-gray-400 text-xs">${escapeHtml(rest.join(' '))}</span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    item.innerHTML = html;
+    div.appendChild(item);
+
+    const toggle = item.querySelector('.schema-toggle');
+    const detail = item.querySelector('.schema-detail');
+    if (detail) {
+      toggle.addEventListener('click', () => {
+        detail.style.display = detail.style.display === 'none' ? '' : 'none';
+      });
+    }
+  });
+}
+
+document.getElementById('sampleBtn').addEventListener('click', () => {
+  document.getElementById('specInput').value = JSON.stringify(SAMPLE_SPEC, null, 2);
+  parseAndRender();
+});
+document.getElementById('parseBtn').addEventListener('click', parseAndRender);
+document.getElementById('clearInputBtn').addEventListener('click', () => {
+  document.getElementById('specInput').value = '';
+  document.getElementById('treeDiv').innerHTML = '<span class="text-gray-600">Parse a spec to see the path tree...</span>';
+  document.getElementById('schemaDiv').innerHTML = '<span class="text-gray-600">No schemas parsed yet...</span>';
+  document.getElementById('statsDiv').classList.add('hidden');
+  document.getElementById('parseError').classList.add('hidden');
+});
+document.getElementById('expandAllBtn').addEventListener('click', () => {
+  document.querySelectorAll('.deps-section, .children-section').forEach(el => el.style.display = '');
+  document.querySelectorAll('.schema-detail').forEach(el => el.style.display = '');
+});
+document.getElementById('collapseAllBtn').addEventListener('click', () => {
+  document.querySelectorAll('.deps-section, .children-section').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.schema-detail').forEach(el => el.style.display = 'none');
+});
+
+// Auto-parse if input has content
+document.getElementById('specInput').addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') parseAndRender();
+});
+</script>
+</body>
+</html>
